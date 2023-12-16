@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sync"
 
@@ -38,51 +38,43 @@ func readInput(fileName string, BlockSize int, stream *chan []byte, progressStre
 	// Push input file size as the first input to progress stream
 	*progressStream <- fileSize
 
+	reader := bufio.NewReader(file)
+
 	// Initialize offset
 	offset := int64(0)
+	i64BlockSize := int64(BlockSize)
+	// Loop until the entire file is read
 	for {
-		if fileSize-offset >= int64(BlockSize) {
-			// Create full-block
-			block := make([]byte, BlockSize)
+		// Determine the size of the block to read
+		readSize := BlockSize
+		if fileSize-offset < i64BlockSize {
+			readSize = int(fileSize - offset)
+		}
 
-			// Read from file at offset to full-block
-			// Panic if there are any errors
-			bytesRead, err := file.ReadAt(block, offset)
-			if err != nil {
-				panic(err.Error())
-			}
+		// Create a block with the determined size
+		block := make([]byte, readSize)
 
-			// PUSH full-block to buffered s channel
-			*stream <- block
-			// Increment offset by bytesRead
-			offset += int64(bytesRead)
+		// Read from the buffered reader to the block
+		// Panic if there are any errors
+		bytesRead, err := reader.Read(block)
+		if err != nil {
+			panic(err.Error())
+		}
 
-			// Push offset to buffered progress channel
-			*progressStream <- offset
-		} else if fileSize-offset == 0 {
-			// Exit condition - the entire file is read, exit
+		// PUSH block to buffered stream channel
+		*stream <- block
+
+		// Increment offset by bytesRead
+		offset += int64(bytesRead)
+
+		// Push offset to buffered progress channel
+		*progressStream <- offset
+
+		// Check if the entire file is read, exit if so
+		if fileSize-offset == 0 {
 			// Send nil to stream to signal end of input
-			// Break out of loop
 			*stream <- nil
 			break
-		} else {
-			// Create partial block
-			block := make([]byte, fileSize-offset)
-
-			// Read from file at offset to part-block
-			// Panic if there are any errors
-			bytesRead, err := file.ReadAt(block, offset)
-			if err != nil {
-				panic(err.Error())
-			}
-
-			// PUSH partial-block to channel
-			*stream <- block
-			// Increment offset by bytesRead
-			offset += int64(bytesRead)
-
-			// Push offset to buffered progress channel
-			*progressStream <- offset
 		}
 	}
 }
@@ -104,6 +96,10 @@ func writeOutput(fileName string, stream *chan []byte, wg *sync.WaitGroup) {
 		}
 	}()
 
+	// Create a buffered writer
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
 	// Initialize offset
 	offset := int64(0)
 	for {
@@ -119,7 +115,7 @@ func writeOutput(fileName string, stream *chan []byte, wg *sync.WaitGroup) {
 
 		// Write block to file at offset
 		// Panic if there are any errors
-		bytesWritten, err := file.WriteAt(block, offset)
+		bytesWritten, err := writer.Write(block)
 		if err != nil {
 			panic(err.Error())
 		}
@@ -156,7 +152,7 @@ func fileExists(filename string) bool {
 func readFromFile(filePath string) []byte {
 	// Check if file exists and if not, print
 	if fileExists(filePath) {
-		data, err := ioutil.ReadFile(filePath)
+		data, err := os.ReadFile(filePath)
 		if err != nil {
 			panic(err.Error())
 		}
