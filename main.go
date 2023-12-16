@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -44,6 +45,8 @@ func main() {
 		}
 
 		// If there's a 5th distinct arguement, treat it as output file name
+		// We can't use the same file as input and output
+		// So we need to check if it's not the same
 		if len(os.Args) == 5 && os.Args[4] != os.Args[2] {
 			outputPath = os.Args[4]
 		}
@@ -57,26 +60,39 @@ func main() {
 			panic(err.Error())
 		}
 
-		// Run 10 samples through standard cipher block encryption
+		// Run samples through standard cipher block encryption
 		// And measure the average time taken to encrypt a block
 		// So we can make a buffer of the appropriate size for the current machine
-		samples := 10
+		samplesParam := os.Getenv("SAMPLES")
+		if samplesParam == "" {
+			samplesParam = "10"
+		}
+
+		samples, err := strconv.Atoi(samplesParam)
+		if err != nil {
+			panic(err.Error())
+		}
+		if samples == 0 || samples < 10 {
+			samples = 10
+		}
+
 		sampleBytes := make([]byte, blockCipher.BlockSize())
-		var avg time.Duration
+		var totalTimeTaken time.Duration
 
 		for i := 0; i < samples; i++ {
 			t0 := time.Now()
 			blockCipher.Encrypt(sampleBytes, sampleBytes)
-			avg += time.Now().Sub(t0)
+			totalTimeTaken += time.Now().Sub(t0)
 		}
 
-		// Calculate the buffer size by finding the average number of bytes encrypted
-		// Each nano second (in float) and multiplying the result by the blocksize and 1000 * 1000
-		// The multiplication by these specific magic numbers is based on some logic which I came up with
-		// But failed to properly document - will be explained at some point in the unforseeable future
-		bufferSize := int64(float64(blockCipher.BlockSize()*samples) / float64(avg.Nanoseconds()) * float64(blockCipher.BlockSize()) * 1000000)
+		// Calculate the buffer size by finding the average number of bytes encrypted per nanosecond
+		// then convert it to blocks per nanosecond
+		// and finally optimal bufferSize appears to be blocks per miliseconds (beyond this, program runs into other scaling issues)
+		bytesPerNs := float64(blockCipher.BlockSize()*samples) / float64(totalTimeTaken.Nanoseconds())
+		blocksPerNs := bytesPerNs * float64(blockCipher.BlockSize())
+		bufferSize := int64(blocksPerNs * 1000 * 1000) // buffer size is how many blocks we process per milisecond
 
-		// Create buffere input, output and progress channels with the calculated buffer size
+		// Create buffer input, output and progress channels with the calculated buffer size
 		inputStream = make(chan []byte, bufferSize)
 		outputStream = make(chan []byte, bufferSize)
 		progressStream = make(chan int64, bufferSize)
@@ -102,7 +118,7 @@ func main() {
 		outputPath = os.Args[2] + ".seat"
 	}
 
-	// Start the encrypt / decrypt and output writer routines
+	// Start the encrypt / decrypt and file write routines
 	wg.Add(2)
 	if toEncrypt {
 		go encrypt(&blockCipher, &inputStream, &outputStream, &wg)
